@@ -128,19 +128,25 @@ class SDMService {
     private:
         string m_sdmIp;
         int m_sdmPort;
-        ServerSocket m_sdmSocket;
-        Logger m_logger;
+        
+        ServerSocket m_sdmTrackerSocket;
+        ClientSocket m_sdmLBClientSocket;
+        
+        mutex m_trackerListMutex;
+        mutex m_lastHeartbeatMutex;
+        mutex m_replicaTrackerMutex;
+        mutex m_leaderTrackerMutex;
+
         vector<pair<string,int>> m_trackerList;
         unordered_map<string, steady_clock::time_point> m_lastHeartbeat;
-        mutex m_trackerMutex;
-        int m_lbSocketFd{-1};
-        mutex m_lbMutex;
         pair<string,int> m_replicaTracker;
         pair<string,int> m_leaderTracker;
+        
+        Logger m_logger;
 
         void acceptConnections();
         ExecResult executeCommand(string command, int clientFd);
-        void monitorHeartbeats();
+        void monitorHeartbeats(string trackerIpPort);
         void electTrackers();
         string registerTracker(string trackerIp, string trackerPort);
         string removeTracker(string trackerIp, string trackerPort);
@@ -153,16 +159,16 @@ class SDMService {
         SDMService(const SDMService&) = delete;
         SDMService& operator=(const SDMService&) = delete;
         
-        SDMService(string sdmIp, int trackerPort)
+        SDMService(string sdmIp, int sdmPort)
             : m_sdmIp(sdmIp)
             , m_sdmPort(sdmPort)
-            , m_sdmSocket(ServerSocket(sdmIp, sdmPort))
+            , m_sdmTrackerSocket(ServerSocket(sdmIp, sdmPort))
+            , m_sdmLBClientSocket(ClientSocket())
             , m_logger(Logger(sdmIp, sdmPort, "sdm"))
-            , m_trackerList(0)
         {}
 
     public:
-        void init();
+        void init(string lbIp, int lbPort);
         void start();
         void stop();
 

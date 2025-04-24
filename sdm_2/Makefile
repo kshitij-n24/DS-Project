@@ -1,7 +1,7 @@
 CC = g++
-CFLAGS = -Wall -Werror -pedantic
+CFLAGS = -Wall
 DEPS = headers.h  
-OBJ = classes/Logger.o classes/Groups.o classes/ServerSocket.o classes/Utils.o classes/SDM.o SDM.o
+OBJ = classes/Logger.o classes/ServerSocket.o classes/ClientSocket.o classes/Utils.o classes/SDMService.o sdm.o
 
 %.o: %.cpp $(DEPS)
     $(CC) $(CFLAGS) -c -o $@ $<

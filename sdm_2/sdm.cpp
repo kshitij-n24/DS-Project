@@ -6,10 +6,12 @@ void handleQuitOfService(SDMService &sdm_service);
 
 int main(int argc, char* argv[]){
     try{
-        pair <string, int> sdmIpPort = Utils::processArgs(argc, argv);
+        vector<string> IpPortVec = Utils::processArgs(argc, argv);
         
-        string sdmIp = sdmIpPort.first;
-        int sdmPort = sdmIpPort.second;
+        string sdmIp = IpPortVec[0];
+        int sdmPort = stoi(IpPortVec[1]);
+        string lbIp = IpPortVec[2];
+        int lbPort = stoi(IpPortVec[3]);
 
         generalLogger = Logger(sdmIp, sdmPort, "general");
 
@@ -19,7 +21,7 @@ int main(int argc, char* argv[]){
         SDM& sdm_service = SDM::getInstance(sdmIp, sdmPort);
         generalLogger.log("INFO", "SDM created successfully!!");   
 
-        sdm_service.init();
+        sdm_service.init(lbIp, lbPort);
         sdm_service.start();
         generalLogger.log("INFO", "SDM started accepting connections!!");
 

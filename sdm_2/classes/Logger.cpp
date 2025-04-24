@@ -1,12 +1,12 @@
 #include "../headers.h"
 
-Logger::Logger(string seederIp, int seederPort, string name)
-: m_seederIp(seederIp)
-, m_seederPort(to_string(seederPort))
-, m_logDirPath("./logs/" + seederIp + ":" + to_string(seederPort))
+Logger::Logger(string sdmIp, int sdmPort, string name)
+: m_seederIp(sdmIp)
+, m_sdmPort(to_string(sdmPort))
+, m_logDirPath("./logs/sdm/" + sdmIp + ":" + to_string(sdmPort))
 , m_logFilePath(m_logDirPath + "/" + name + ".txt")
 {
-    //: Creating directory named logs_seederIp_seederPort
+    //: Creating directory named logs_seederIp_sdmPort
     struct stat info;
 
     if (stat("./logs", &info) != 0 || !(info.st_mode & S_IFDIR)) {
@@ -21,7 +21,7 @@ Logger::Logger(string seederIp, int seederPort, string name)
         }
     }
 
-    //: Creating leecher log file
+    //: Creating sdm log file
     int fd = open(m_logFilePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if(fd <= 0){
         throw string("Opening log file!!");

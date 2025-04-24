@@ -1,10 +1,15 @@
 #include "../headers.h"
 
-void SDMService::init(){
-    m_sdmSocket.createSocket();
-    m_sdmSocket.setOptions();
-    m_sdmSocket.bindSocket();
-    m_sdmSocket.listenSocket();
+void SDMService::init(string lbIp, int lbPort){
+    m_sdmTrackerSocket.createSocket();
+    m_sdmTrackerSocket.setOptions();
+    m_sdmTrackerSocket.bindSocket();
+    m_sdmTrackerSocket.listenSocket();
+
+    m_ClientSocket.createSocket();
+    m_ClientSocket.setOptions();
+    m_ClientSocket.connectSocket(lbIp, lbPort);
+
     cout << "Tracker started listening!!\n" << flush;
     m_logger.log("Success", "Tracker started listening!!");
 }
@@ -18,13 +23,13 @@ void SDMService::start(){
 }
 
 void SDMService::stop(){
-    m_sdmSocket.closeSocket();
+    m_sdmTrackerSocket.closeSocket();
 }
 
 void SDMService::acceptConnections(){
     while(true){
         try{
-            int clientFd = m_sdmSocket.acceptSocket();
+            int clientFd = m_sdmTrackerSocket.acceptSocket();
             cout << "Connection established with FD of " + to_string(clientFd) + "\n" << flush;
             m_logger.log("INFO", "Connection established with FD of " + to_string(clientFd));
             
@@ -40,7 +45,7 @@ void SDMService::acceptConnections(){
 void SDMService::handleConnection(int clientFd){
     while (true) {
         try{
-            string receivedData = m_sdmSocket.recvSocket(clientFd);
+            string receivedData = m_sdmTrackerSocket.recvSocket(clientFd);
 
             if(receivedData == "") {
                 m_logger.log("INFO", "FD = " + to_string(clientFd) + " | lb/tracker closed the connection!!");
@@ -57,7 +62,7 @@ void SDMService::handleConnection(int clientFd){
                 result = e;
             }
             
-            m_sdmSocket.sendSocket(clientFd, result.response);
+            m_sdmTrackerSocket.sendSocket(clientFd, result.response);
 
             if (result.action() == ConnAction::CLOSE) {
                 close(clientFd);
@@ -77,13 +82,6 @@ ExecResult executeCommand(string command, int clientFd){
     
     if(tokens.size() < 1) throw string("Invalid command!!");
 
-    if (tokens[0] == "register_lb") {
-        lock_guard<mutex> lock(m_lbMutex);
-        m_lbSocketFd = clientFd;
-        updateLoadBalancer();
-        return ExecResult("ACK_LB", ConnAction::KEEP_OPEN);
-    }
-
     if(tokens[0] == "register_tracker"){
         if(tokens.size() != 3) throw string("Invalid arguments to register_tracker command!!");
         
@@ -94,12 +92,13 @@ ExecResult executeCommand(string command, int clientFd){
         return ExecResult(resp, ConnAction::CLOSE);
     }
 
-    if (tokens[0] == "heartbeat" && tokens.size() == 2) {
+    if (tokens[0] == "heartbeat") {
         if(tokens.size() != 2) throw string("Invalid arguments to heartbeat command!!");
 
-        lock_guard<mutex> lock(m_trackerMutex);
-        m_lastHeartbeat[tokens[1]] = chrono::steady_clock::now();
-        return ExecResult("ACK", ConnAction::CLOSE);
+        string trackerIpPort = tokens[1];
+
+        monitorHeartbeats(trackerIpPort);
+        return ExecResult("ACK", ConnAction::KEEP_OPEN);
     }
 
     
@@ -169,6 +168,14 @@ string SDMService::registerTracker(const string& trackerIp, const string& tracke
     return resp;
 }
 
+void SDMService::monitorHeartbeats(string trackerIpPort){
+    auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(m_lastHeartbeatMutex);
+    m_lastHeartbeat[trackerIpPort] = now;
+
+    m_logger.log("INFO", "Heartbeat received from " + trackerIpPort);
+}
+
 string SDMService::removeTracker(const string& trackerIp, const string& trackerPort){
     lock_guard<mutex> lock(m_trackerMutex);
     int port = stoi(trackerPort);
@@ -176,7 +183,7 @@ string SDMService::removeTracker(const string& trackerIp, const string& trackerP
                       [&](auto& p){ return p.first == trackerIp && p.second == port; });
     if (it == m_trackerList.end())
     {
-        m_logger.log("INFO", "Removed tracker " + trackerIp + ":" + trackerPort);
+        m_logger.log("INFO", "Could not find tracker " + trackerIp + ":" + trackerPort);
         return "ERROR: Tracker not found";
     }
 
@@ -184,37 +191,6 @@ string SDMService::removeTracker(const string& trackerIp, const string& trackerP
     m_logger.log("INFO", "Removed tracker " + trackerIp + ":" + trackerPort);
     updateLoadBalancer();  // send updated list to LB
     return "SUCCESS";
-}
-
-void SDMService::monitorHeartbeats(){
-    while (true) {
-        this_thread::sleep_for(chrono::seconds(10));
-        vector<pair<string,int>> snapshot;
-        {
-            lock_guard<mutex> lock(m_trackerMutex);
-            snapshot = m_trackerList;
-        }
-        for (auto& t : snapshot) {
-            ClientSocket sock;
-            bool alive = true;
-            try {
-                sock.createSocket();
-                sock.setOptions();
-                sock.connectSocket(t.first, t.second);
-                sock.sendSocket("heartbeat");
-                string ack = sock.recvSocket();
-                if (ack != "ack") alive = false;
-            } catch (...) {
-                alive = false;
-            }
-            sock.closeSocket();
-            if (!alive) {
-                removeTracker(t.first, to_string(t.second));
-                m_logger.log("WARN", "Heartbeat failed; auto-removed "
-                                     + t.first + ":" + to_string(t.second));
-            }
-        }
-    }
 }
 
 void SDMService::cleanupStaleTrackers(){
@@ -248,25 +224,24 @@ void SDMService::cleanupStaleTrackers(){
 void SDMService::updateLoadBalancer(){
     string payload;
     
+    payload = "update_trackers ";
+
     lock_guard<mutex> lock(m_trackerMutex);
     for (auto& t : m_trackerList) {
         if (t != m_replicaTracker) {
-            payload += t.first + ":" + to_string(t.second) + ",";
+            payload += t.first + ":" + to_string(t.second) + " ";
         }
     }
 
     if (!payload.empty()) payload.pop_back();
 
-    lock_guard<mutex> lbLock(m_lbMutex);
     if (m_lbSocketFd != -1) {
         try {
-            m_sdmSocket.sendSocket(m_lbSocketFd, payload);
-            m_logger.log("INFO", "Pushed to LB: [" + payload + "]");
+            m_sdmLBClientSocket.sendSocket(payload);
+            m_logger.log("INFO", "Pushed to tracker list to LB: [" + payload + "]");
         }
         catch (const string& e) {
             m_logger.log("WARN", "Failed to push to LB FD=" + to_string(m_lbSocketFd) + ": " + e);
-            close(m_lbSocketFd);
-            m_lbSocketFd = -1;
         }
     }
 }
